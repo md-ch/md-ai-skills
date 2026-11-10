@@ -39,7 +39,7 @@ if [[ -n "$env_file" ]]; then
   url="${url:-${MDCMS_API_URL:-}}"
   proj="${proj:-${MDCMS_PROJECT:-}}"
   task="${task:-${MDCMS_TASK:-}}"
-  subtask="${subtask:-${MDCMS_SUBTASK:-}}"
+  subtask="${stsk:-${MDCMS_SUBTASK:-}}"
 fi
 
 if [[ -z "$url" || -z "$token" || -z "$proj" || -z "$task" || -z "$subtask" ]]; then
@@ -57,7 +57,7 @@ curl -sS -G -D "$hdr" -o "$body" \
   -H "Accept: application/json" \
   --data-urlencode "proj=${proj}" \
   --data-urlencode "task=${task}" \
-  --data-urlencode "subtask=${subtask}" \
+  --data-urlencode "stsk=${subtask}" \
   "${url}/task"
 
 status="$(awk 'BEGIN{c=""} /^HTTP/{c=$2} END{print c}' "$hdr")"
