@@ -1,13 +1,13 @@
 ---
 name: mdchange-request
 description: >-
-  Creates or updates MDCMS object requests for selected repository files. Use
-  when the user asks to request MDChange objects, update an object request, or
-  run mdchange-request. Does not post RFP dependencies or create objects.
+  Creates or updates MDCMS object requests directly for IBM i Source Physical File members
+  and IFS stream files (no source-control dependency). Use when the user asks to request MDChange objects,
+  update an object request, or run mdchange-request.
 disable-model-invocation: true
 ---
 
-# MDCMS change-request URL
+# MDCMS Object Request (Native IBM i & IFS)
 
 `<skill-dir>` is the directory that contains this SKILL.md. Resolve it from the path given for this file.
 
@@ -21,23 +21,21 @@ Do not open, read, or summarize any other skill unless the user confirms that sk
 
 ## Running a script
 
-Run these scripts with Git Bash, never PowerShell `curl`.
+Run these scripts with a standard Bash shell, never PowerShell `curl`.
 
-On Windows the agent shell is PowerShell. Do not use `&&` or `||` in that shell. Windows PowerShell does not accept `&&` as a statement separator. Do not run `cd ... && git ...`. Run one command at a time, or separate commands with `;`. For git, use `git -C "<repository-root>"` instead of changing directory.
-
-A quoted program path is not a command unless it starts with the call operator `&`. Use this form:
+On Windows the agent shell is PowerShell. Do not use `&&` or `||` in that shell. Windows PowerShell does not accept `&&` as a statement separator. Run one command at a time, or separate commands with `;`.
 
 ```text
-& "C:\Program Files\Git\bin\bash.exe" "<skill-dir>/script.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --flag "<value>"
+bash "<skill-dir>/script.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --flag "<value>"
 ```
 
 Pass the noted token as `--token`. In any text shown to the user, write that argument as `--token ***`. Do not paste the executed command into the chat.
 
-Quote the bash path, the script path, and all parameter values.
+Quote the script path and all parameter values.
 
-On macOS or Linux, run `bash "<skill-dir>/script.sh"` with the same quoted arguments. Do not prefix that command with `&`.
+Use the same form on Windows, macOS, and Linux.
 
-Do not rebuild the curl.
+Do not rebuild the curl commands manually.
 
 ## Properties
 
@@ -50,13 +48,11 @@ These properties must be defined with a value:
 - `MDCMS_CONNECTION_SECURE`
 - `APPLICATION`
 - `LEVEL`
-- `REPOSITORY_ID`
-- `MAP_BRANCH_TO_TASK` (`true` or `false`)
-- `PROJECT_STARTING_POSITION` (an integer from 1 to 99)
+- `MDCMS_PROJECT`
+- `MDCMS_TASK`
+- `MDCMS_SUBTASK`
 
 `MDCMS_CONNECTION_PORT` and `MDCMS_CONNECTION_ENVIRONMENT` may be blank.
-
-When `MAP_BRANCH_TO_TASK` is `false`, `MDCMS_PROJECT`, `MDCMS_TASK`, and `MDCMS_SUBTASK` must also be defined with a value.
 
 If any required property is missing or has no value, ask the user to run skill `mdchange-config`, then stop. Do not open, read, or summarize that skill. Do not create or edit `mdchange.properties`.
 
@@ -81,182 +77,158 @@ If the token is blank or missing, or the returned value has no user after `;`, t
 
 In every later step, the bearer token is this noted token. Pass it as `--token`. In any text shown to the user, write `--token ***`. The noted user is the user ID used when matching object requests.
 
-## 7. Files and existing object requests
+## 6. Objects / Members / IFS Source Specification
 
-If files were added to the chat prior to running the skill, use those. Otherwise show the list of uncommitted changes for the current branch in the repository and ask the user to select 1, multiple files, or all files of the changes for requesting and building. Allow selecting more than one file. Include an All choice and a Cancel choice. If the AskQuestion tool is available, use it with multiple selection; otherwise ask in chat.
+Ask the user whether they are working with:
+1. **Source Physical File Member** (e.g. RPG, RPGLE, SQLRPGLE, CLP, CLLE, DSPF, PF)
+2. **IFS Stream File**
 
-List those changes with this command. Do not chain it to another command with `&&`.
+### Change reason (`rsn`)
 
-```text
-git -C "<repository-root>" status --short
-```
+The MDCMS REST API accepts only these reason values: `*MIGRATE`, `*DELETE`, `*RECOMPILE`, `*UPDATE`. Do not use `*MODIFY` or `*NEW`; the API does not accept them.
 
-If the user cancels, abort.
+- Use `*MIGRATE` when checking out an existing member/object and uploading edited source.
+- Use `*DELETE` to delete the object.
+- Use `*RECOMPILE` or `*UPDATE` only when the user explicitly asks for that reason.
 
-Get the checked-out branch and the git status of each selected file before calling `get-object-requests.sh`. Run these as separate PowerShell commands. Do not use `&&` or `||`. Do not use `cd ... && git ...`.
+### For Source Physical File Member:
+Gather or confirm:
+- `objn`: Object Name (max 10 chars, e.g. `FRS021`)
+- `objt`: Object Type (e.g. `*PGM`, `*SRVPGM`, `*MODULE`, `*FILE`)
+- `attr`: Source Attribute (e.g. `RPG`, `RPGLE`, `SQLRPGLE`, `CLP`, `CLLE`, `DSPF`, `PF`) — if unknown, query `<skill-dir>/get-attributes.sh --url <MDCMS_API_URL> --token *** --appl <APPLICATION> --lvl <LEVEL> --objt <objt>`
+- `fsfl`: Source File (e.g. `QRPGSRC`, `QRPGLESRC`, `QDDSSRC`, `QCLSRC`, `QCLLESRC`)
+- `fsmb`: Source Member name (defaults to `objn`)
+- `rsn`: Reason for change (`*MIGRATE`, `*DELETE`, `*RECOMPILE`, or `*UPDATE`)
+- Optional local source file path if attaching/uploading edited source from workspace.
 
-```text
-git -C "<repository-root>" branch --show-current
-git -C "<repository-root>" status --short -- "<repository-relative-path>"
-```
+**Source format must match the actual member.** Do not assume RPGLE/`QRPGLESRC`. The `fsfl`, the member's source type, and `attr` must all describe the real member as it exists on IBM i (or in the MDCMS level), and `attr` must map to the right compiler.
 
-Pass every selected repository-relative path as its own argument after `--`. The branch name is the output of `git branch --show-current`. A short status of `D` means the file is deleted.
+### For IFS Stream File:
+Gather or confirm:
+- `ifsp`: IFS Directory path (e.g. `/home/projects/app`)
+- `ifsf`: IFS File name (e.g. `app.js`)
+- `rsn`: Reason for change (`*MIGRATE`, `*DELETE`, `*RECOMPILE`, or `*UPDATE`)
+- Optional local file path if attaching/uploading edited source from workspace.
 
-For each selected file, repeat the following steps.
+## 7. Query Existing Object Requests
 
-Invoke `<skill-dir>/get-object-requests.sh` with Git Bash (never PowerShell). Do not use `--env-file`. Pass every argument at runtime:
+Invoke `<skill-dir>/get-object-requests.sh` with Bash (never PowerShell). Pass:
 
 - `url` from `MDCMS_API_URL`
 - `token`: the noted token
 - `appl` from `APPLICATION`
 - `lvl` from `LEVEL`
-- `reason`: `DELETE` if the file is set to be deleted in the repository, otherwise `MODIFY`
 - `status`: `01`
-- `repoId` from `REPOSITORY_ID`
-- `branch`: the name of the currently checked-out branch
-- `gpath`: the directory of the file relative to the repository root, with a leading `/` and `/` as the folder separator. Use `/` when the file is at the repository root. Do not include any part of the path above the root of the repository on the file system.
-- `gfile`: the file name in the repository
+- `objn`: `objn` (if member)
+- `objt`: `objt` (if member)
+- `ifsp`: `ifsp` (if IFS)
+- `ifsf`: `ifsf` (if IFS)
 
-Example: repository root `C:\VS Code Repos\ado-mdcms\MDCMS` and file `C:\VS Code Repos\ado-mdcms\MDCMS\source\MCRPGLE\MDWSOCRT.sqlrpgle` give `gpath` `/source/MCRPGLE` and `gfile` `MDWSOCRT.sqlrpgle`. A file at the repository root gives `gpath` `/`.
-
-Show the user the command below with `--token ***`. Run it with Running a script. Do not paste the executed command into the chat.
+Show the command with `--token ***`. Do not paste the real token.
 
 ```text
-<skill-dir>/get-object-requests.sh --url <MDCMS_API_URL> --token *** --appl <APPLICATION> --lvl <LEVEL> --reason <DELETE|MODIFY> --status 01 --repoId <REPOSITORY_ID> --branch <branch> --gpath <gpath> --gfile <gfile>
+<skill-dir>/get-object-requests.sh --url <MDCMS_API_URL> --token *** --appl <APPLICATION> --lvl <LEVEL> --status 01 --objn <objn> --objt <objt>
 ```
 
-On Windows, execute exactly:
+Execute exactly:
 
 ```text
-& "C:\Program Files\Git\bin\bash.exe" "<skill-dir>/get-object-requests.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --appl "<APPLICATION>" --lvl "<LEVEL>" --reason "<DELETE|MODIFY>" --status "01" --repoId "<REPOSITORY_ID>" --branch "<branch>" --gpath "<gpath>" --gfile "<gfile>"
+bash "<skill-dir>/get-object-requests.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --appl "<APPLICATION>" --lvl "<LEVEL>" --status "01" --objn "<objn>" --objt "<objt>"
 ```
 
-The command line that runs must start with `&`. Put the noted token in `--token`. The command shown to the user keeps `--token ***`. Do not use `--env-file`.
+The script prints `HTTP_STATUS=` and then the response body.
 
-The script prints `HTTP_STATUS=` and then the response body. It does not print the token.
+If `objectRequests` contains one or more rows:
+- If a row exists where `user` equals the noted user, note `objectId` and `rfp`. If local source was modified and needs uploading, go to **8. PATCH OBJECT-REQUEST**. If already checked out on IBM i directly, note the RFP number and proceed to Next skills.
+- If rows exist but for a different user, prompt the user:
+  - Skip Object
+  - Update Request for other User (use that `objectId` for PATCH OBJECT-REQUEST)
+  - Create New Request (go to **9. POST OBJECT-REQUEST**)
+  - Abort
 
-The response body contains an `objectRequests` array.
+If `objectRequests` is empty or no request exists:
+- Proceed to **9. POST OBJECT-REQUEST**.
 
-If `objectRequests` contains one or more rows, use the first row whose `user` equals the noted user from the MCP tool for the PATCH OBJECT-REQUEST step.
+## 8. PATCH OBJECT-REQUEST (Source Upload)
 
-If one or more rows are returned and none of them has `user` equal to the noted user, show the details of the first row to the user and ask them to choose. Include Skip Object, Update Request for other User, Create New Request, and Abort. Do not offer an Other button. If the AskQuestion tool is available, use it; otherwise ask in chat.
+If the change reason is `*DELETE` or no local file upload is needed, this step is done.
 
-- Skip Object: begin the loop for the next selected file.
-- Update Request for other User: use the first row for the PATCH OBJECT-REQUEST step.
-- Create New Request: proceed to the POST OBJECT-REQUEST step.
-- Abort: abort the run.
-
-If `objectRequests` is missing or empty, skip to the POST OBJECT-REQUEST step.
-
-## 8. PATCH OBJECT-REQUEST
-
-Note the value of `rfp` from the object-requests row selected for this file in section 7, if an RFP number has not already been noted during this execution run.
-
-If the reason for this file was set to `DELETE`, this file is done. Return to the loop for the next file.
-
-Otherwise invoke `<skill-dir>/patch-object-request.sh` with Git Bash (never PowerShell). Do not use `--env-file`. Pass every argument at runtime:
+If a local file is being uploaded to an existing request:
+Invoke `<skill-dir>/patch-object-request.sh` with Bash (never PowerShell):
 
 - `url` from `MDCMS_API_URL`
 - `token`: the noted token
-- `object-id`: `objectId` from the object-requests row selected for this file in section 7
-- `full-path`: the full path of the file
-- `gfile`: the file name in the repository
-
-Show the user the command below with `--token ***`. Run it with Running a script. Do not paste the executed command into the chat.
+- `object-id`: `objectId` from section 7
+- `full-path`: local path to source file
+- `fsmb`: member name (or `ifsf` for IFS)
 
 ```text
-<skill-dir>/patch-object-request.sh --url <MDCMS_API_URL> --token *** --object-id <objectId> --full-path <full-path> --gfile <gfile>
+<skill-dir>/patch-object-request.sh --url <MDCMS_API_URL> --token *** --object-id <objectId> --full-path <full-path> --fsmb <fsmb>
 ```
 
-On Windows, execute exactly:
+Execute exactly:
 
 ```text
-& "C:\Program Files\Git\bin\bash.exe" "<skill-dir>/patch-object-request.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --object-id "<objectId>" --full-path "<full-path>" --gfile "<gfile>"
+bash "<skill-dir>/patch-object-request.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --object-id "<objectId>" --full-path "<full-path>" --fsmb "<fsmb>"
 ```
 
-The command line that runs must start with `&`. Put the noted token in `--token`. The command shown to the user keeps `--token ***`. Do not use `--env-file`.
+The script prints `HTTP_STATUS=` and then the response body.
 
-The script prints `HTTP_STATUS=` and then the response body. It does not print the token.
+If HTTP status is not 200 or `rtn.sev` is > 10, display the error and prompt to retry, ignore, or abort.
 
-When the script is finished, If the HTTP status is not 200 or `rtn.sev` is greater than 10, show the user the error and ask to retry, ignore, or abort. If the AskQuestion tool is available, use it; otherwise ask in chat.
+## 9. POST OBJECT-REQUEST (Create Request)
 
-- Abort: abort.
-- Retry: retry the PATCH OBJECT-REQUEST step.
-- No error, or the user ignored the error: this file is done. Return to the loop for the next file.
+If a new request must be created:
 
-## 9. POST OBJECT-REQUEST
-
-If the reason for this file was set to `DELETE`, invoke `<skill-dir>/post-object-request.sh` with Git Bash (never PowerShell). Do not use `--env-file`. Pass every argument at runtime:
+### Without Local File Attachment:
+Run `<skill-dir>/post-object-request.sh` with Bash (never PowerShell):
 
 - `url` from `MDCMS_API_URL`
 - `token`: the noted token
 - `appl` from `APPLICATION`
 - `lvl` from `LEVEL`
-- `rsn`: `*DELETE`
-- `repo` from `REPOSITORY_ID`
-- `gpath`: the same repository-relative directory already determined for this file in section 7. Do not pass a filesystem path, a drive letter, or the repository root.
-- `gfile`: the file name in the repository
-- `branch`: the name of the currently checked-out branch
-- `proj`: `*BRANCH` if `MAP_BRANCH_TO_TASK` is `true`, otherwise `MDCMS_PROJECT`. When `MAP_BRANCH_TO_TASK` is `true` and `PROJECT_STARTING_POSITION` is greater than 1, append `,` and `PROJECT_STARTING_POSITION`, so the value is `*BRANCH,<PROJECT_STARTING_POSITION>`
-- `task`: `0` if `MAP_BRANCH_TO_TASK` is `true`, otherwise `MDCMS_TASK`
-- `stsk`: `0` if `MAP_BRANCH_TO_TASK` is `true`, otherwise `MDCMS_SUBTASK`
-- `arfp`: `*YES` if an RFP number has been noted during this execution run, otherwise `*AUTO`
-- `rfp`: the noted RFP number if an RFP number has been noted during this execution run, otherwise `0`
+- `rsn`: `*MIGRATE`, `*DELETE`, `*RECOMPILE`, or `*UPDATE`
+- `proj`: `MDCMS_PROJECT`
+- `task`: `MDCMS_TASK`
+- `stsk`: `MDCMS_SUBTASK`
+- `arfp`: `*YES` if an RFP number is already noted, otherwise `*AUTO`
+- `rfp`: the noted RFP number if known, otherwise `0`
 - `lock`: `*YES`
-
-Show the user the command below with `--token ***`. Run it with Running a script. Do not paste the executed command into the chat.
-
-```text
-<skill-dir>/post-object-request.sh --url <MDCMS_API_URL> --token *** --appl <APPLICATION> --lvl <LEVEL> --rsn *DELETE --repo <REPOSITORY_ID> --gpath <gpath> --gfile <gfile> --branch <branch> --proj <proj> --task <task> --stsk <stsk> --arfp <*YES|*AUTO> --rfp <rfp> --lock *YES
-```
-
-On Windows, execute exactly:
+- Plus member parameters (`--objn`, `--objt`, `--attr`, `--fsfl`, `--fsmb`) or IFS parameters (`--ifsp`, `--ifsf`).
 
 ```text
-& "C:\Program Files\Git\bin\bash.exe" "<skill-dir>/post-object-request.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --appl "<APPLICATION>" --lvl "<LEVEL>" --rsn "*DELETE" --repo "<REPOSITORY_ID>" --gpath "<gpath>" --gfile "<gfile>" --branch "<branch>" --proj "<proj>" --task "<task>" --stsk "<stsk>" --arfp "<*YES|*AUTO>" --rfp "<rfp>" --lock "*YES"
+<skill-dir>/post-object-request.sh --url <MDCMS_API_URL> --token *** --appl <APPLICATION> --lvl <LEVEL> --rsn <rsn> --proj <proj> --task <task> --stsk <stsk> --arfp <arfp> --rfp <rfp> --lock *YES --objn <objn> --objt <objt> --attr <attr> --fsfl <fsfl> --fsmb <fsmb>
 ```
 
-The command line that runs must start with `&`. Put the noted token in `--token`. The command shown to the user keeps `--token ***`. Do not use `--env-file`.
+Execute exactly:
 
-The script prints `HTTP_STATUS=` and then the response body. It does not print the token.
+```text
+bash "<skill-dir>/post-object-request.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --appl "<APPLICATION>" --lvl "<LEVEL>" --rsn "<rsn>" --proj "<proj>" --task "<task>" --stsk "<stsk>" --arfp "<arfp>" --rfp "<rfp>" --lock "*YES" --objn "<objn>" --objt "<objt>" --attr "<attr>" --fsfl "<fsfl>" --fsmb "<fsmb>"
+```
 
-When the script is finished, handle the response in this order:
+### With Local File Attachment:
+Run `<skill-dir>/post-object-request-with-attachment.sh` with the same parameters plus `--full-path <full-path>`.
 
-1. If `rtn.msg` is `Target Object already locked by another request`, show the user the error and ask to retry, retry unlocked, ignore, or abort. If the AskQuestion tool is available, use it; otherwise ask in chat.
+Execute exactly:
+
+```text
+bash "<skill-dir>/post-object-request-with-attachment.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --appl "<APPLICATION>" --lvl "<LEVEL>" --rsn "<rsn>" --proj "<proj>" --task "<task>" --stsk "<stsk>" --arfp "<arfp>" --rfp "<rfp>" --lock "*YES" --objn "<objn>" --objt "<objt>" --attr "<attr>" --fsfl "<fsfl>" --fsmb "<fsmb>" --full-path "<full-path>"
+```
+
+The script prints `HTTP_STATUS=` and then the response body.
+
+When the script is finished, handle the response:
+1. If `rtn.msg` is `Target Object already locked by another request`, show the user the error and ask to retry, retry unlocked, ignore, or abort.
    - Abort: abort.
    - Retry: retry the POST OBJECT-REQUEST step with `lock` still set to `*YES`.
    - Retry unlocked: retry the POST OBJECT-REQUEST step with `lock` set to `*NO`.
-   - Ignore: this file is done. Return to the loop for the next file.
-2. If the HTTP status is not 200 or `rtn.sev` is greater than 10, show the user the error and ask to retry, ignore, or abort. If the AskQuestion tool is available, use it; otherwise ask in chat.
-   - Abort: abort.
-   - Retry: retry the POST OBJECT-REQUEST step with `lock` still set to `*YES`.
-   - Ignore: this file is done. Return to the loop for the next file.
-3. If there is no error, note the RFP number from the response if an RFP number has not already been noted during this execution run. This file is done. Return to the loop for the next file.
-
-If the reason for this file was set to `MODIFY`, invoke `<skill-dir>/post-object-request-with-attachment.sh` with Git Bash (never PowerShell). Do not use `--env-file`. Pass the same arguments as the DELETE request, with these differences:
-
-- `rsn`: `*MIGRATE`
-- `full-path`: the full path of the file
-
-Show the user the command below with `--token ***`. Run it with Running a script. Do not paste the executed command into the chat.
-
-```text
-<skill-dir>/post-object-request-with-attachment.sh --url <MDCMS_API_URL> --token *** --appl <APPLICATION> --lvl <LEVEL> --rsn *MIGRATE --repo <REPOSITORY_ID> --gpath <gpath> --gfile <gfile> --branch <branch> --proj <proj> --task <task> --stsk <stsk> --arfp <*YES|*AUTO> --rfp <rfp> --lock *YES --full-path <full-path>
-```
-
-On Windows, execute exactly:
-
-```text
-& "C:\Program Files\Git\bin\bash.exe" "<skill-dir>/post-object-request-with-attachment.sh" --url "<MDCMS_API_URL>" --token "<noted token>" --appl "<APPLICATION>" --lvl "<LEVEL>" --rsn "*MIGRATE" --repo "<REPOSITORY_ID>" --gpath "<gpath>" --gfile "<gfile>" --branch "<branch>" --proj "<proj>" --task "<task>" --stsk "<stsk>" --arfp "<*YES|*AUTO>" --rfp "<rfp>" --lock "*YES" --full-path "<full-path>"
-```
-
-The command line that runs must start with `&`. Put the noted token in `--token`. The command shown to the user keeps `--token ***`. Do not use `--env-file`.
-
-When the script is finished, use the same response handling as the DELETE reason.
+   - Ignore: this object is done.
+2. If the HTTP status is not 200 or `rtn.sev` is greater than 10, show the user the error and ask to retry, ignore, or abort.
+3. If there is no error, note the RFP number and objectId from the response.
 
 ## Next skills
 
-Continue here only when the object-request loop finished without the user cancelling or aborting the run.
+Continue here only when the object-request step finished without the user cancelling or aborting the run.
 
 Ask whether skill `mdchange-include-dependencies` should be run. Offer a Yes button and a No button. Do not offer an Other button and do not offer the option to Skip. If the AskQuestion tool is available, use it; otherwise ask in chat.
 
